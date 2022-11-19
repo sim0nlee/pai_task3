@@ -1,17 +1,35 @@
 import numpy as np
+import os
+import random
 from scipy.optimize import fmin_l_bfgs_b
 import matplotlib.pyplot as plt
 import math
 from scipy.special import gamma, kv
 
 from scipy.stats import norm
+from sklearn.gaussian_process import GaussianProcessRegressor
+from sklearn.gaussian_process.kernels import WhiteKernel, Matern
 
 domain = np.array([[0, 5]])
+n_dim = 1
 
 """ Solution """
 
 
 class BO_algo():
+    def __init__(self):
+        """Initializes the algorithm with a parameter configuration. """
+        self.x = np.zeros(1)
+        self.y = np.zeros(1)
+
+        self.h = 0.1
+        self.s = 1
+
+        self.beta = 2
+        self.N = 0
+
+        self.x_values = []
+        self.c_values = []
 
     class GaussianProcess:
         def __init__(self,noise, mean, kernel_var, kernel_rho, kernel_smo, train_x, train_y):
@@ -76,27 +94,11 @@ class BO_algo():
             plt.scatter(self.train_x, self.train_y)
             plt.show()
 
-    def __init__(self):
-        """Initializes the algorithm with a parameter configuration. """
-
-        # TODO: enter your code here
-        self.x = np.zeros(1)
-        self.y = np.zeros(1)
-
-        self.h = 0.1
-        self.s = 1
-
-        self.beta = 2
-        self.N = 0
-
-        self.x_values = []
-        self.c_values = []
-
-
 
     def next_recommendation(self):
         """
         Recommend the next input to sample.
+
         Returns
         -------
         recommendation: np.ndarray
@@ -117,6 +119,7 @@ class BO_algo():
     def optimize_acquisition_function(self):
         """
         Optimizes the acquisition function.
+
         Returns
         -------
         x_opt: np.ndarray
@@ -131,10 +134,8 @@ class BO_algo():
 
         # Restarts the optimization 20 times and pick best solution
         for _ in range(20):
-            x0 = domain[:, 0] + (domain[:, 1] - domain[:, 0]) * \
-                 np.random.rand(domain.shape[0])
-            result = fmin_l_bfgs_b(objective, x0=x0, bounds=domain,
-                                   approx_grad=True)
+            x0 = domain[:, 0] + (domain[:, 1] - domain[:, 0]) * np.random.rand(domain.shape[0])
+            result = fmin_l_bfgs_b(objective, x0=x0, bounds=domain, approx_grad=True)
             x_values.append(np.clip(result[0], *domain[0]))
             f_values.append(-result[1])
 
@@ -146,10 +147,12 @@ class BO_algo():
     def acquisition_function(self, x):
         """
         Compute the acquisition function.
+
         Parameters
         ----------
         x: np.ndarray
             x in domain of f
+
         Returns
         ------
         af_value: float
@@ -191,6 +194,7 @@ class BO_algo():
     def add_data_point(self, x, f, v):
         """
         Add data points to the model.
+
         Parameters
         ----------
         x: np.ndarray
@@ -228,6 +232,7 @@ class BO_algo():
     def get_solution(self):
         """
         Return x_opt that is believed to be the maximizer of f.
+
         Returns
         -------
         solution: np.ndarray
@@ -248,6 +253,7 @@ class BO_algo():
 
 """ Toy problem to check code works as expected """
 
+
 def check_in_domain(x):
     """Validate input"""
     x = np.atleast_2d(x)
@@ -256,22 +262,25 @@ def check_in_domain(x):
 
 def f(x):
     """Dummy objective"""
-    print("using this")
     mid_point = domain[:, 0] + 0.5 * (domain[:, 1] - domain[:, 0])
     return - np.linalg.norm(x - mid_point, 2)  # -(x - 2.5)^2
 
 
 def v(x):
     """Dummy speed"""
-    if x > 1:
-        return 2
-    else:
-        return 1
+    return 2.0
 
 
 def main():
     # Init problem
     agent = BO_algo()
+
+    # Add initial safe point
+    x_init = domain[:, 0] + (domain[:, 1] - domain[:, 0]) * np.random.rand(
+        1, n_dim)
+    obj_val = f(x_init)
+    cost_val = v(x_init)
+    agent.add_data_point(x_init, obj_val, cost_val)
 
     # Loop until budget is exhausted
     for j in range(20):
