@@ -1,36 +1,102 @@
 import numpy as np
-import os
-import random
 from scipy.optimize import fmin_l_bfgs_b
+import matplotlib.pyplot as plt
+import math
+from scipy.special import gamma, kv
+
 from scipy.stats import norm
-from sklearn.gaussian_process import GaussianProcessRegressor
-from sklearn.gaussian_process.kernels import WhiteKernel, Matern
 
 domain = np.array([[0, 5]])
-n_dim = 1
 
 """ Solution """
 
 
 class BO_algo():
+
+    class GaussianProcess:
+        def __init__(self,noise, mean, kernel_var, kernel_rho, kernel_smo, train_x, train_y):
+            self.s = noise
+            self.mean = mean
+            self.kernel_var = kernel_var
+            self.l = kernel_rho
+            self.v = kernel_smo
+            self.train_x = train_x
+            self.train_y = train_y
+            self.N = len(train_x)
+            self.X = np.array(train_x).reshape((self.N, 1))
+            self.K_AA = np.zeros((self.N, self.N))
+            self.mu_A = np.zeros((self.N, 1))
+            self.y_A = np.array(train_y).reshape((self.N, 1))
+
+            for i in range(self.N):
+                self.mu_A[i, 0] = self.mu_pri(self.X[i, 0])
+                for j in range(self.N):
+                    self.K_AA[i, j] = self.K_pri(self.X[i, 0], self.X[j, 0])
+            self.I_AA = np.linalg.inv(self.K_AA + self.s ** 2 * np.eye(self.N))
+
+        def K_pri(self, x1, x2):
+            r = np.abs(x1 - x2)
+            if r == 0:
+                r = 1e-8
+            part1 = 2 ** (1 - self.v) / gamma(self.v)
+            part2 = (np.sqrt(2 * self.v) * r / self.l) ** self.v
+            part3 = kv(self.v, np.sqrt(2 * self.v) * r / self.l)
+            return self.kernel_var * part1 * part2 * part3
+
+        def mu_pri(self, x):
+            return self.mean
+
+        def mu_pos(self, x):
+            K_xA = np.zeros((1, self.N))
+            for i in range(self.N):
+                K_xA[0, i] = self.K_pri(x, self.X[i, 0])
+            return self.mu_pri(x) + np.matmul(np.matmul(K_xA, self.I_AA), (self.y_A - self.mu_A))[0][0]
+
+        def var_pos(self, x1, x2):
+            K_x1A = np.zeros((1, self.N))
+            for i in range(self.N):
+                K_x1A[0, i] = self.K_pri(x1, self.X[i, 0])
+            K_x2A = np.zeros((1, self.N))
+            for i in range(self.N):
+                K_x2A[0, i] = self.K_pri(x2, self.X[i, 0])
+            return self.K_pri(x1, x2) - np.matmul(K_x1A, np.matmul(self.I_AA, np.transpose(K_x2A)))[0][0]
+
+        def plot_results(self):
+            x = np.linspace(0, 5, 50)
+
+            y = []
+            v = []
+            for i in range(len(x)):
+                y.append(self.mu_pos(x[i]))
+                v.append(np.sqrt(self.var_pos(x[i], x[i])))
+            y = np.array(y)
+            plt.plot(x, y)
+            plt.fill_between(x, y - v, y + v,
+                             color='b', alpha=0.2, label='Predictive Distribution')
+            plt.scatter(self.train_x, self.train_y)
+            plt.show()
+
     def __init__(self):
         """Initializes the algorithm with a parameter configuration. """
+
         # TODO: enter your code here
-        self.prev_evals = []
-        self.f = GaussianProcessRegressor(
-            kernel=0.5 * Matern(length_scale=0.5, nu=2.5) + WhiteKernel(0.15 ** 2),
-            optimizer=None,
-            normalize_y=True)
-        self.v = GaussianProcessRegressor(
-            kernel=1.5 + np.sqrt(2) * Matern(length_scale=0.5, nu=2.5) + WhiteKernel(0.0001 ** 2),
-            optimizer=None,
-            normalize_y=True
-        )
+        self.x = np.zeros(1)
+        self.y = np.zeros(1)
+
+        self.h = 0.1
+        self.s = 1
+
+        self.beta = 2
+        self.N = 0
+
+        self.x_values = []
+        self.c_values = []
+
+
 
     def next_recommendation(self):
         """
         Recommend the next input to sample.
-
         Returns
         -------
         recommendation: np.ndarray
@@ -39,18 +105,18 @@ class BO_algo():
 
         # TODO: enter your code here
         # In implementing this function, you may use optimize_acquisition_function() defined below.
-        if not self.prev_evals:
-            nxt = np.array([[np.random.uniform(0, 5)]])
+        if self.N == 0:
+            x = np.array([[np.random.uniform(0, 5)]])
         else:
-            nxt = self.optimize_acquisition_function()
+            x = self.optimize_acquisition_function()
 
-        return nxt
+        return x
+
 
 
     def optimize_acquisition_function(self):
         """
         Optimizes the acquisition function.
-
         Returns
         -------
         x_opt: np.ndarray
@@ -65,23 +131,25 @@ class BO_algo():
 
         # Restarts the optimization 20 times and pick best solution
         for _ in range(20):
-            x0 = domain[:, 0] + (domain[:, 1] - domain[:, 0]) * np.random.rand(domain.shape[0])
-            result = fmin_l_bfgs_b(objective, x0=x0, bounds=domain, approx_grad=True)
+            x0 = domain[:, 0] + (domain[:, 1] - domain[:, 0]) * \
+                 np.random.rand(domain.shape[0])
+            result = fmin_l_bfgs_b(objective, x0=x0, bounds=domain,
+                                   approx_grad=True)
             x_values.append(np.clip(result[0], *domain[0]))
-            f_values.append(result[1])
+            f_values.append(-result[1])
 
-        ind = np.argmin(f_values)
+        ind = np.argmax(f_values)
         return np.atleast_2d(x_values[ind])
+
+
 
     def acquisition_function(self, x):
         """
         Compute the acquisition function.
-
         Parameters
         ----------
         x: np.ndarray
             x in domain of f
-
         Returns
         ------
         af_value: float
@@ -89,33 +157,40 @@ class BO_algo():
         """
 
         # TODO: enter your code here
-        # phi = norm.cdf
-        # N = norm.pdf
-        #
-        # speed_mean, speed_std = self.speed.predict(x.reshape(-1, 1), return_std=True)
-        # speed_sat_prob = 1 - phi((1.2 - speed_mean) / speed_std)
-        #
-        # f_min = min([data[1] for data in self.points])
-        # obj_mean, obj_std = self.objective.predict(x.reshape(-1, 1), return_std=True)
-        #
-        # return ((obj_mean - f_min) * (phi((f_min - obj_mean) / obj_std)) + N(
-        #     (f_min - obj_mean) / obj_std)) * speed_sat_prob
-        con_mean, con_std = self.v.predict(x.reshape(1, -1), return_std=True)
-        con_prob_x = 1.0 - norm.cdf(1.2, con_mean, con_std)  # Proba of x satisfying constraint v^(x) >= 1.2
 
-        f_min = np.min([triplet[1] for triplet in self.prev_evals])  # Get current min fct value
+        """For Gaussian process, evaluate GP at x"""
+        mean_f = self.GP_f.mu_pos(x)
+        std_f = np.sqrt(self.GP_f.var_pos(x, x))
 
-        obj_mean, obj_std = self.f.predict(x.reshape(1, -1), return_std=True)
-        z = (f_min - obj_mean) / obj_std  # Standardized
-        ei_x = obj_std * (z * norm.cdf(z) + norm.pdf(z))  # Expected improvement for obs x
-        af_x = ei_x * con_prob_x  # Acquisition function
-        return af_x
+        mean_v = self.GP_v.mu_pos(x)
+        std_v = np.sqrt(abs(self.GP_v.var_pos(x, x)))
+
+        penalty = 3
+
+        mean_sample = []
+
+        for i in range(len(self.train_x)):
+            mean_sample.append(self.GP_f.mu_pos(self.train_x[i]))
+
+        mu_sample_opt = np.max(mean_sample)
+
+        xi = 0.01
+
+        imp = mean_f - mu_sample_opt - xi
+        Z = imp / std_f
+
+        EI = imp * norm.cdf(Z) + std_f * norm.pdf(Z)
+
+        if mean_v - 0.2 * std_v <= 1.2:
+            return EI - penalty
+        else:
+            return EI
+
 
 
     def add_data_point(self, x, f, v):
         """
         Add data points to the model.
-
         Parameters
         ----------
         x: np.ndarray
@@ -127,61 +202,51 @@ class BO_algo():
         """
 
         # TODO: enter your code here
-        x = x.squeeze(-1)
-        self.prev_evals.append([float(x), float(f), float(v)])
+        """For Gaussian process, add point x and y = c(v,f)"""
+        if self.N == 0:
+            self.train_x = [x]
+            self.train_f = [f]
+            self.train_v = [v]
 
-        x_vals = np.array([data[0] for data in self.prev_evals])
-        f_vals = np.array([data[1] for data in self.prev_evals])
-        v_vals = np.array([data[2] for data in self.prev_evals])
+        else:
+            self.train_x.append(x)
+            self.train_f.append(f)
+            self.train_v.append(v)
 
-        self.f.fit(x_vals.reshape(-1, 1), f_vals)
-        self.v.fit(x_vals.reshape(-1, 1), v_vals)
+
+        self.N += 1
+
+
+        self.GP_f = self.GaussianProcess(0.15, 0, 0.5, 0.5, 2.5, self.train_x, self.train_f)
+        self.GP_v = self.GaussianProcess(0.0001, 1.5, np.sqrt(2), 0.5, 2.5, self.train_x, self.train_v)
+
+
+
+
+
 
     def get_solution(self):
         """
         Return x_opt that is believed to be the maximizer of f.
-
         Returns
         -------
         solution: np.ndarray
             1 x domain.shape[0] array containing the optimal solution of the problem
         """
+        index = -1
+        max_f = -math.inf
 
-        # TODO: enter your code here
-        # x_vals = np.array([data[0] for data in self.prev_evals])
-        # f_vals = np.array([data[1] for data in self.prev_evals])
-        # v_vals = np.array([data[2] for data in self.prev_evals])
-        #
-        # satisfied = np.argwhere(v_vals >= 1.2)
-        #
-        # if satisfied.size == 0:
-        #     print('No solution satisfying the speed constraint')
-        #     print()
-        #
-        # return x_vals[0] if satisfied.size == 0 else x_vals[np.argmin(f_vals[satisfied])]
-        x_vals = np.array([triplet[0] for triplet in self.prev_evals])
-        obj_vals = np.array([triplet[1] for triplet in self.prev_evals])
-        con_vals = np.array([triplet[2] for triplet in self.prev_evals])
+        for i in range(self.N):
+            if self.train_v[i] > 1.2 and self.train_f[i] > max_f:
+                max_f = self.train_f[i]
+                index = i
+        return self.train_x[index]
 
-        sorted_inds = np.argsort(obj_vals)
-        feasible = False
-        argmin_ind = 0
-        for ind in sorted_inds:
-            if con_vals[ind] >= 1.2:
-                argmin_ind = ind
-                feasible = True
-                break
 
-        # if not feasible:
-        #     print('Feasibility notifier: No feasible solution found!')
-        # print('Minimiser triplet: ', (x_vals[argmin_ind], obj_vals[argmin_ind], con_vals[argmin_ind]))
-        # print('Number of iterations: ', len(self.prev_evals))
 
-        return x_vals[argmin_ind]
 
 
 """ Toy problem to check code works as expected """
-
 
 def check_in_domain(x):
     """Validate input"""
@@ -191,25 +256,22 @@ def check_in_domain(x):
 
 def f(x):
     """Dummy objective"""
+    print("using this")
     mid_point = domain[:, 0] + 0.5 * (domain[:, 1] - domain[:, 0])
     return - np.linalg.norm(x - mid_point, 2)  # -(x - 2.5)^2
 
 
 def v(x):
     """Dummy speed"""
-    return 2.0
+    if x > 1:
+        return 2
+    else:
+        return 1
 
 
 def main():
     # Init problem
     agent = BO_algo()
-
-    # Add initial safe point
-    x_init = domain[:, 0] + (domain[:, 1] - domain[:, 0]) * np.random.rand(
-        1, n_dim)
-    obj_val = f(x_init)
-    cost_val = v(x_init)
-    agent.add_data_point(x_init, obj_val, cost_val)
 
     # Loop until budget is exhausted
     for j in range(20):
